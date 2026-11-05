@@ -8,7 +8,7 @@
 ![SQLite](https://img.shields.io/badge/SQLite-003B57?logo=sqlite&logoColor=white)
 ![Status](https://img.shields.io/badge/status-%EA%B3%84%ED%9A%8D%20%EB%8B%A8%EA%B3%84-orange)
 
-한세대학교 디지털영상처리 팀 프로젝트 · **7조 누구시조**
+개발자 : **김동진, 김성민, 정재열**
 
 ---
 
@@ -121,10 +121,3 @@ flowchart LR
 | 팀원 A | 🔍 인식 | 객체 판별, 얼굴 인식, 임계값 조정 |
 | 팀원 B | 🔗 판정·통합 | 등록자/미등록자 판정, 안내 메시지, 전체 통합 |
 | 팀원 C | 📊 데이터·대시보드 | SQLite 저장, 대시보드, 일정 관리 |
-
----
-
-## 📚 문서
-
-- 📝 [프로젝트 계획서](./방문자확인시스템_계획서.md)
-- 🎤 [발표 대본](./방문자확인시스템_발표대본.md)
