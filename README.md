@@ -98,3 +98,13 @@ flowchart LR
 | 4주 | 인식 함수 연결 | 메인 루프 연결, 중복 방지 | 회로 장착, 연동 시험 |
 | 5주 | 인식률·오인식률 확인, 기준값 조정 | 기록 조회·통계, 🔹 (선택) 카운터 승인 화면 | 배선 정리, 🔹 (선택) 승인용 DB 함수 |
 | 6주 | 시연 조명에서 재확인 | 전체 흐름 점검 | 반복 동작 시험, 시연 세팅 |
+
+## DB 개발
+
+SQLite 전체 설계, 공용 함수, 실행 방법은 [DB_DESIGN.md](DB_DESIGN.md)를 참고하세요.
+
+- 실제 DB 초기화: `py -X utf8 database.py`
+- 임시 DB 예제: `py -X utf8 db_example.py`
+- 테스트: `py -X utf8 -m unittest discover -s tests -v`
+
+기존 첫 실습은 [SQLITE_START.md](SQLITE_START.md)에 있습니다. 실제 DB는 `data/visitor.db`, 첫 실습 DB는 `data/demo.db`로 분리됩니다.
