@@ -1,0 +1,8 @@
+numpy
+opencv-python>=4.8
+ultralytics
+pillow
+pyserial
+flask
+matplotlib        # A의 기준값 실험용
+# 얼굴 인식 라이브러리: OpenCV 내장 YuNet + SFace 사용 (추가 설치 없음, 모델은 models/ 폴더)
