@@ -6,20 +6,31 @@ FAKE_CLOSE_SEC = 5
 
 
 class FakeDoor:
-    """아두이노 없이 문 동작을 흉내 낸다. 명령은 콘솔에 출력한다. Door와 같은 메서드를 가진다."""
+    """아두이노 없이 문 동작을 흉내 낸다. 명령은 콘솔에 출력한다. Door와 같은 메서드를 가진다.
+
+    문은 하나다. 열린 동안 OPEN이 다시 오면 남은 시간을 취소하고 새 방문 번호로 처음부터 다시 잰다
+    (계획서 5.5절, 마지막 OPEN의 방문 번호로 연결: 3.6절).
+    """
 
     def __init__(self) -> None:
         self._callback = None
         self._timers: list[threading.Timer] = []
         self._lock = threading.Lock()
         self._closed = False
+        self._generation = 0   # 마지막 OPEN 번호. 이전 OPEN의 타이머는 이벤트를 보내지 않음
 
     def open(self, visit_id: int) -> None:
         """OPEN: 바로 open, 2초 뒤 pass, 5초 뒤 close 이벤트를 보낸다."""
         print(f"[FakeDoor] OPEN (visit {visit_id})")
+        with self._lock:
+            if self._closed:
+                return
+            self._cancel_timers()
+            self._generation += 1
+            generation = self._generation
         self._emit("open", visit_id)
-        self._schedule(FAKE_PASS_SEC, "pass", visit_id)
-        self._schedule(FAKE_CLOSE_SEC, "close", visit_id)
+        self._schedule(FAKE_PASS_SEC, "pass", visit_id, generation)
+        self._schedule(FAKE_CLOSE_SEC, "close", visit_id, generation)
 
     def deny(self) -> None:
         print("[FakeDoor] DENY")
@@ -41,23 +52,25 @@ class FakeDoor:
         """남은 타이머를 모두 취소한다."""
         with self._lock:
             self._closed = True
-            for t in self._timers:
-                t.cancel()
-            self._timers.clear()
+            self._cancel_timers()
 
-    def _schedule(self, delay: float, event: str, visit_id: int) -> None:
-        timer = threading.Timer(delay, self._fire, args=(event, visit_id))
+    def _cancel_timers(self) -> None:
+        for t in self._timers:
+            t.cancel()
+        self._timers.clear()
+
+    def _schedule(self, delay: float, event: str, visit_id: int, generation: int) -> None:
+        timer = threading.Timer(delay, self._fire, args=(event, visit_id, generation))
         timer.daemon = True   # 프로그램이 끝날 때 기다리지 않음
         with self._lock:
-            if self._closed:
+            if self._closed or generation != self._generation:
                 return
-            self._timers = [t for t in self._timers if t.is_alive()]
             self._timers.append(timer)
         timer.start()
 
-    def _fire(self, event: str, visit_id: int) -> None:
+    def _fire(self, event: str, visit_id: int, generation: int) -> None:
         with self._lock:
-            if self._closed:
+            if self._closed or generation != self._generation:
                 return
         self._emit(event, visit_id)
 
