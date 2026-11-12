@@ -6,7 +6,7 @@ import numpy as np
 from ultralytics import YOLO
 
 from common.types import PersonBox
-from config import (CAMERA_INDEX, FRAME_HEIGHT, FRAME_WIDTH, MIN_PERSON_HEIGHT,
+from config import (CAMERA_INDEX, FRAME_HEIGHT, FRAME_WIDTH, MIN_PERSON_HEIGHT, MIRROR,
                     YOLO_CONF, YOLO_IMGSZ, YOLO_MODEL)
 
 PERSON, CAT, DOG = 0, 15, 16
@@ -67,12 +67,22 @@ def _demo() -> None:
                 print("카메라에서 영상을 읽지 못했습니다")
                 break
 
-            for p in detect_people(frame):
-                x1, y1, x2, y2 = p.bbox
+            people = detect_people(frame)   # 판별은 원본으로
+            w = frame.shape[1]
+            if MIRROR:                       # 보이는 화면만 거울 반전, 박스 좌표도 맞춰 뒤집음
+                frame = cv2.flip(frame, 1)
+
+            def place(bbox):
+                x1, y1, x2, y2 = bbox
+                return (w - 1 - x2, y1, w - 1 - x1, y2) if MIRROR else bbox
+
+            for p in people:
+                x1, y1, x2, y2 = place(p.bbox)
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 200, 0), 2)
                 cv2.putText(frame, f"ID {p.track_id} {p.conf:.2f}", (x1, max(y1 - 8, 16)),
                             font, 0.6, (0, 200, 0), 2)
-            for name, _, (x1, y1, x2, y2), _ in last_animals:
+            for name, _, bbox, _ in last_animals:
+                x1, y1, x2, y2 = place(bbox)
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (160, 160, 160), 2)
                 cv2.putText(frame, f"{name} (ignored)", (x1, max(y1 - 8, 16)),
                             font, 0.6, (160, 160, 160), 2)

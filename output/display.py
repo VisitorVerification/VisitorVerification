@@ -84,18 +84,32 @@ def toggle_fullscreen() -> bool:
     return not now_full
 
 
+def mirror(frame: np.ndarray) -> np.ndarray:
+    """화면을 거울처럼 좌우로 뒤집은 새 프레임."""
+    return cv2.flip(frame, 1)
+
+
+def mirror_bbox(bbox: tuple[int, int, int, int], width: int) -> tuple[int, int, int, int]:
+    """원본 좌표의 박스를 좌우로 뒤집힌 화면의 좌표로 바꾼다."""
+    x1, y1, x2, y2 = bbox
+    return (width - 1 - x2, y1, width - 1 - x1, y2)
+
+
 def draw_debug(frame: np.ndarray, people: list[PersonBox],
                results: dict[int, RecognitionResult] | None = None,
-               animals: list | None = None, fps: float | None = None) -> np.ndarray:
+               animals: list | None = None, fps: float | None = None,
+               mirrored: bool = False) -> np.ndarray:
     """사람 박스, 추적 번호, A의 인식 결과(이름·거리)를 그린 새 프레임을 돌려준다.
 
     results: 추적 번호별 최근 인식 결과. animals: detector.last_animals
+    mirrored: True면 원본 frame을 좌우로 뒤집고, 박스는 뒤집힌 위치에 그린다 (글자는 정상 방향).
     """
-    out = frame.copy()
+    out = mirror(frame) if mirrored else frame.copy()
+    w = out.shape[1]
     labels = []   # (x, y, 글자, BGR 색)
 
     for p in people:
-        x1, y1, x2, y2 = p.bbox
+        x1, y1, x2, y2 = mirror_bbox(p.bbox, w) if mirrored else p.bbox
         cv2.rectangle(out, (x1, y1), (x2, y2), DEBUG_PERSON, 2)
         text = f"ID {p.track_id}"
         r = (results or {}).get(p.track_id)
@@ -108,7 +122,8 @@ def draw_debug(frame: np.ndarray, people: list[PersonBox],
                     text += f" {r.distance:.2f}"
         labels.append((x1, y1, text, DEBUG_PERSON))
 
-    for name, _, (x1, y1, x2, y2), _ in animals or []:
+    for name, _, bbox, _ in animals or []:
+        x1, y1, x2, y2 = mirror_bbox(bbox, w) if mirrored else bbox
         cv2.rectangle(out, (x1, y1), (x2, y2), DEBUG_ANIMAL, 2)
         labels.append((x1, y1, f"{name} (무시)", DEBUG_ANIMAL))
 

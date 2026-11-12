@@ -13,6 +13,7 @@ YOLO_MODEL = "yolov8n.pt"
 YOLO_CONF = 0.5
 YOLO_IMGSZ = 480
 MIN_PERSON_HEIGHT = 120        # 픽셀. 이보다 작은(멀리 있는) 사람은 건너뜀
+MIRROR = True                  # 화면을 거울처럼 좌우 반전 (보이는 화면만. 인식·저장은 원본)
 
 # ── 얼굴 인식·판정 (A) ──
 FACE_INTERVAL = 5              # 몇 프레임마다 얼굴 인식을 할지
