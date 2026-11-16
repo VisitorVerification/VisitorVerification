@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}기록 조회 · 방문자 대시보드{% endblock %}
+{% block content %}
+<h2>기록 조회</h2>
+<form class="filters" method="get" action="{{ url_for('records') }}">
+  <label>구분
+    <select name="category">
+      <option value="">전체</option>
+      {% for value, label in labels.items() %}
+      <option value="{{ value }}" {{ 'selected' if value == category }}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>날짜 <input type="date" name="date" value="{{ date }}"></label>
+  <label>이름 <input type="search" name="name" value="{{ name }}" placeholder="이름 검색"></label>
+  <div class="buttons">
+    <button type="submit">조회</button>
+    <a class="reset" href="{{ url_for('records') }}">초기화</a>
+  </div>
+</form>
+
+<p class="count">{{ rows|length }}건{% if rows|length >= limit %} (최근 {{ limit }}건까지 표시){% endif %}</p>
+{% set recent = rows %}
+{% include "_table.html" %}
+{% endblock %}

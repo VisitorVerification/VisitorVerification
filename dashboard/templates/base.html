@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  {% block head %}{% endblock %}
+  <title>{% block title %}방문자 대시보드{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header>
+    <h1>방문자 대시보드</h1>
+    <nav>
+      <a href="{{ url_for('index') }}" class="{{ 'on' if request.endpoint == 'index' }}">오늘 현황</a>
+      <a href="{{ url_for('records') }}" class="{{ 'on' if request.endpoint == 'records' }}">기록 조회</a>
+    </nav>
+  </header>
+  <main>
+    {% if error %}<p class="error">{{ error }}</p>{% endif %}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

@@ -1,0 +1,28 @@
+{% if recent %}
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>사진</th><th>시각</th><th>구분</th><th>이름</th><th>거리</th><th>처리</th><th>문</th><th>통과</th></tr>
+    </thead>
+    <tbody>
+      {% for r in recent %}
+      {% set img = image_url(r.image_path) %}
+      <tr>
+        <td class="photo">
+          {% if img %}<a href="{{ img }}" target="_blank"><img src="{{ img }}" alt="방문 사진 {{ r.id }}" loading="lazy"></a>{% else %}-{% endif %}
+        </td>
+        <td class="time">{{ r.visited_at[11:] if time_only else r.visited_at }}</td>
+        <td><span class="badge {{ r.category }}">{{ category_label(r.category) }}</span></td>
+        <td>{{ r.person_name or '-' }}</td>
+        <td>{{ '%.2f'|format(r.face_distance) if r.face_distance is not none else '-' }}</td>
+        <td>{{ approval_label(r.approval_status) }}</td>
+        <td>{{ '열림' if r.door_opened else '-' }}</td>
+        <td>{{ r.passed_at[11:] if r.passed_at else '-' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="empty">기록이 없습니다.</p>
+{% endif %}

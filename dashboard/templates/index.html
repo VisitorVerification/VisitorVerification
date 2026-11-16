@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block head %}<meta http-equiv="refresh" content="{{ refresh }}">{% endblock %}
+{% block title %}오늘 현황 · 방문자 대시보드{% endblock %}
+{% block content %}
+<h2>오늘 현황 <small>{{ today }} · {{ refresh }}초마다 새로고침</small></h2>
+<section class="cards">
+  <div class="card total"><span>전체</span><strong>{{ stats.total }}</strong></div>
+  <div class="card registered"><span>등록자</span><strong>{{ stats.registered }}</strong></div>
+  <div class="card unregistered"><span>미등록자</span><strong>{{ stats.unregistered }}</strong></div>
+  <div class="card unknown"><span>인식 불가</span><strong>{{ stats.unknown }}</strong></div>
+</section>
+
+<h2>최근 기록 <small>{{ recent|length }}건</small></h2>
+{% set time_only = true %}
+{% include "_table.html" %}
+<p class="more"><a href="{{ url_for('records') }}">전체 기록 조회 →</a></p>
+{% endblock %}
