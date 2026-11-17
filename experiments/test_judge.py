@@ -1,146 +1,192 @@
-"""가짜 RecognitionResult로 vision/judge.py의 규칙을 확인한다.
+"""vision/judge.py 규칙 확인 (인수인계서 5.5).
 
-실행:  python experiments/test_judge.py
+가짜 RecognitionResult를 넣어 vote(), needs_face_hint()가 규칙대로 동작하는지 본다.
+카메라·모델 없이 실행된다.
+
+실행 (프로젝트 루트에서):
+    python experiments/test_judge.py
 """
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # 프로젝트 루트
 
 import numpy as np
 
-import config
 from common.types import RecognitionResult
+from config import FACE_HINT_SEC, UNKNOWN_TIMEOUT_SEC, VOTE_MIN, VOTE_WINDOW
 from vision import judge
+from vision.judge import needs_face_hint, vote
+
+STEP = 0.2   # 가짜 프레임 간격 (초)
+_results: list[tuple[str, bool, str]] = []
 
 
-def reg(pid, name, d=0.3):
-    return RecognitionResult(face_found=True, person_id=pid, name=name, distance=d,
-                             face_image=np.zeros((4, 4, 3), np.uint8),
-                             embedding=np.ones(128, np.float32))
+# ──────────────────────────────────────────────
+# 가짜 결과 만들기
+# ──────────────────────────────────────────────
+def reg(pid: int, name: str, dist: float = 0.3) -> RecognitionResult:
+    """등록자로 인식된 결과."""
+    return RecognitionResult(face_found=True, person_id=pid, name=name, distance=dist,
+                             face_image=np.zeros((50, 50, 3), np.uint8),
+                             embedding=np.full(128, pid, np.float32))
 
 
-def unreg(d=0.8):
-    return RecognitionResult(face_found=True, distance=d,
-                             face_image=np.zeros((4, 4, 3), np.uint8),
+def unreg(dist: float = 0.8) -> RecognitionResult:
+    """얼굴은 찾았지만 기준값을 넘은 결과 (미등록자)."""
+    return RecognitionResult(face_found=True, distance=dist,
+                             face_image=np.zeros((50, 50, 3), np.uint8),
                              embedding=np.full(128, 0.5, np.float32))
 
 
-NOFACE = RecognitionResult(face_found=False)
+def noface() -> RecognitionResult:
+    return RecognitionResult(face_found=False)
 
 
-def feed(track, results, t0=0.0, step=0.2):
-    """결과를 차례로 넣고 (시각, 판정) 목록을 돌려준다."""
-    out = []
-    for i, r in enumerate(results):
-        t = t0 + i * step
-        out.append((t, judge.vote(track, r, t)))
-    return out
+def feed(track_id: int, results: list[RecognitionResult], start: float = 0.0):
+    """결과를 STEP 간격으로 차례로 넣고, (각 결과의 vote 반환값 목록, 마지막 시각)을 돌려준다."""
+    out, t = [], start
+    for r in results:
+        out.append(vote(track_id, r, t))
+        t += STEP
+    return out, t - STEP
 
 
-def test_registered_after_vote_min():
-    judge.reset_all()
-    res = feed(1, [reg(7, "홍길동", 0.35), reg(7, "홍길동", 0.30),
-                   reg(7, "홍길동", 0.40), reg(7, "홍길동", 0.33)])
-    assert all(d is None for _, d in res[:3]), "VOTE_MIN 전에 판정되면 안 됨"
-    d = res[3][1]
-    assert d and d.category == "registered" and d.person_id == 7 and d.name == "홍길동"
-    assert abs(d.distance - 0.30) < 1e-9, "결과들 중 가장 작은 거리"
-    assert d.face_image is not None and d.embedding is not None
+def check(name: str, ok: bool, detail: str = "") -> None:
+    _results.append((name, ok, detail))
+    print(f"  {'✅ PASS' if ok else '❌ FAIL'}  {name}" + (f"  ({detail})" if detail and not ok else ""))
 
 
-def test_mixed_stays_pending():
-    judge.reset_all()
-    res = feed(1, [reg(1, "a"), reg(2, "b"), reg(1, "a"), unreg(), reg(1, "a"), reg(2, "b")])
-    assert all(d is None for _, d in res), "섞이면 보류"
-
-
-def test_window_slides():
-    judge.reset_all()
-    # 창 크기 5: [2,1,1,1,1] 에서 1이 4개 → 확정
-    res = feed(1, [reg(2, "b"), reg(1, "a"), reg(1, "a"), reg(1, "a"), reg(1, "a")])
-    assert res[-1][1] and res[-1][1].person_id == 1
-    judge.reset_all()
-    # [1,U,1,1,U,1] → 마지막 창 [U,1,1,U,1] 은 1이 3개 → 보류
-    res = feed(1, [reg(1, "a"), unreg(), reg(1, "a"), reg(1, "a"), unreg(), reg(1, "a")])
-    assert all(d is None for _, d in res), "창 안에 1이 3개뿐이면 보류"
-    # 1을 하나 더 → 창 [1,1,U,1,1] 에서 1이 4개 → 확정
-    d = judge.vote(1, reg(1, "a"), 1.2)
-    assert d and d.person_id == 1, "창 [1,1,U,1,1] 에서 1이 4개면 확정"
+# ──────────────────────────────────────────────
+# 테스트
+# ──────────────────────────────────────────────
+def test_registered():
+    judge._reset_all()
+    dists = [0.35, 0.28, 0.40, 0.31]
+    out, _ = feed(1, [reg(7, "홍길동", d) for d in dists[:VOTE_MIN]])
+    d = out[-1]
+    check("등록자: VOTE_MIN개 전까지는 보류", all(x is None for x in out[:-1]))
+    check("등록자: VOTE_MIN개째에 registered 확정", d is not None and d.category == "registered",
+          f"받은 값 {d}")
+    if d:
+        check("등록자: id·이름이 맞음", d.person_id == 7 and d.name == "홍길동")
+        check("등록자: 거리는 그중 가장 작은 값", d.distance == min(dists[:VOTE_MIN]), f"{d.distance}")
+        check("등록자: 최근 얼굴·벡터가 들어 있음", d.face_image is not None and d.embedding is not None)
 
 
 def test_unregistered():
-    judge.reset_all()
-    res = feed(3, [unreg(0.7), unreg(0.9), unreg(0.8), unreg(0.75)])
-    d = res[-1][1]
-    assert d and d.category == "unregistered" and d.person_id is None
-    assert d.embedding is not None and abs(d.distance - 0.75) < 1e-9
+    judge._reset_all()
+    out, _ = feed(1, [unreg() for _ in range(VOTE_MIN)])
+    d = out[-1]
+    check("미등록자: VOTE_MIN개째에 unregistered 확정",
+          d is not None and d.category == "unregistered" and all(x is None for x in out[:-1]), f"{d}")
+    if d:
+        check("미등록자: id·이름은 None, 벡터는 있음 (중복 방지용)",
+              d.person_id is None and d.name is None and d.embedding is not None)
 
 
-def test_no_face_hint_then_unknown():
-    judge.reset_all()
-    assert judge.vote(5, NOFACE, 0.0) is None
-    assert not judge.needs_face_hint(5, 1.9)
-    assert judge.needs_face_hint(5, config.FACE_HINT_SEC)
-    assert judge.needs_face_hint(5, 4.9)
-    assert judge.vote(5, NOFACE, 4.9) is None
-    d = judge.vote(5, NOFACE, config.UNKNOWN_TIMEOUT_SEC)
-    assert d and d.category == "unknown" and d.face_image is None and d.embedding is None
-    assert not judge.needs_face_hint(5, config.UNKNOWN_TIMEOUT_SEC), "판정 후 초기화"
+def test_mixed_stays_pending():
+    judge._reset_all()
+    results = [reg(1, "A"), unreg(), reg(2, "B"), unreg(), reg(1, "A")]   # 어느 쪽도 VOTE_MIN 미만
+    out, _ = feed(1, results[:VOTE_WINDOW])
+    check("섞인 결과: 확정하지 않고 보류", all(x is None for x in out), f"{out}")
 
 
-def test_face_lost_after_found():
-    judge.reset_all()
-    judge.vote(6, unreg(), 0.0)
-    judge.vote(6, reg(1, "a"), 1.0)          # 마지막으로 얼굴 찾은 시각 = 1.0
-    assert judge.vote(6, NOFACE, 3.0) is None
-    assert judge.needs_face_hint(6, 3.0)
-    assert judge.vote(6, NOFACE, 5.9) is None
-    d = judge.vote(6, NOFACE, 6.0)
-    assert d and d.category == "unknown"
+def test_flicker_and_sliding():
+    if (VOTE_WINDOW, VOTE_MIN) != (5, 4):
+        print(f"  ⏭️  SKIP 깜빡임·밀려나기 (VOTE_WINDOW={VOTE_WINDOW}, VOTE_MIN={VOTE_MIN}일 때는 건너뜀)")
+        return
+    judge._reset_all()
+    out, _ = feed(1, [reg(1, "A"), reg(1, "A"), unreg(), reg(1, "A"), reg(1, "A")])
+    check("깜빡임: 5번 중 4번 같으면 5번째에 확정",
+          out[-1] is not None and out[-1].category == "registered" and all(x is None for x in out[:-1]))
 
-
-def test_tracks_independent():
-    judge.reset_all()
-    for i in range(3):
-        assert judge.vote(10, reg(1, "a"), i * 0.2) is None
-        assert judge.vote(11, unreg(), i * 0.2 + 0.1) is None
-    d10 = judge.vote(10, reg(1, "a"), 0.6)
-    d11 = judge.vote(11, unreg(), 0.7)
-    assert d10.category == "registered" and d10.track_id == 10
-    assert d11.category == "unregistered" and d11.track_id == 11
+    judge._reset_all()
+    out, _ = feed(1, [unreg(), unreg(), unreg(), reg(1, "A"), reg(1, "A"), reg(1, "A"), reg(1, "A")])
+    first = next((i for i, x in enumerate(out) if x is not None), None)
+    check("밀려나기: 오래된 결과는 창 밖으로 빠지고 7번째에 등록자 확정",
+          first == 6 and out[6].category == "registered", f"처음 확정된 순서 {first}")
 
 
 def test_reset_after_decision():
-    judge.reset_all()
-    feed(1, [reg(1, "a")] * 4)
-    res = feed(1, [reg(1, "a")] * 3, t0=1.0)
-    assert all(d is None for _, d in res), "판정 뒤에는 처음부터 다시 모은다"
+    judge._reset_all()
+    _, t = feed(1, [reg(1, "A") for _ in range(VOTE_MIN)])
+    d = vote(1, reg(1, "A"), t + STEP)
+    check("판정 후 초기화: 바로 다음 결과 하나로는 다시 확정하지 않음", d is None, f"{d}")
 
 
-def test_stale_track_removed():
-    judge.reset_all()
-    feed(1, [reg(1, "a")] * 3)
-    judge.vote(2, NOFACE, 20.0)               # 다른 추적 번호 호출 → 오래된 1번 정리
-    assert 1 not in judge._tracks
-    assert judge.vote(1, reg(1, "a"), 20.2) is None, "지워진 뒤 새로 시작"
+def test_unknown_never_found():
+    judge._reset_all()
+    t, first_unknown, hint_ok = 0.0, None, True
+    while t <= UNKNOWN_TIMEOUT_SEC + 1:
+        expected_hint = FACE_HINT_SEC <= t < UNKNOWN_TIMEOUT_SEC
+        d = vote(1, noface(), t)
+        if d is not None and first_unknown is None:
+            first_unknown = (t, d)
+            break
+        if needs_face_hint(1, t) != expected_hint:
+            hint_ok = False
+        t = round(t + STEP, 6)
+    check("얼굴 못 찾음: FACE_HINT_SEC부터 UNKNOWN_TIMEOUT_SEC 전까지만 안내", hint_ok)
+    ok = (first_unknown is not None and first_unknown[1].category == "unknown"
+          and abs(first_unknown[0] - UNKNOWN_TIMEOUT_SEC) < STEP)
+    check("얼굴 못 찾음: UNKNOWN_TIMEOUT_SEC에 unknown 확정", ok, f"{first_unknown}")
+    if first_unknown:
+        d = first_unknown[1]
+        check("인식 불가: 얼굴·벡터 없음", d.face_image is None and d.embedding is None)
 
 
-def main():
-    tests = [v for k, v in globals().items() if k.startswith("test_")]
-    failed = 0
+def test_unknown_after_face_lost():
+    judge._reset_all()
+    vote(1, noface(), 0.0)
+    vote(1, unreg(), 4.0)          # 4초에 얼굴을 찾음 → 시계가 다시 시작
+    d1 = vote(1, noface(), UNKNOWN_TIMEOUT_SEC + 0.1)               # 처음 본 지 5초 넘음
+    d2 = vote(1, noface(), 4.0 + UNKNOWN_TIMEOUT_SEC + 0.1)         # 얼굴 찾은 지 5초 넘음
+    check("얼굴을 놓친 경우: 처음 본 지가 아니라 얼굴 찾은 지 기준으로 unknown",
+          d1 is None and d2 is not None and d2.category == "unknown", f"d1={d1}, d2={d2}")
+
+
+def test_face_found_no_hint():
+    judge._reset_all()
+    for i in range(10):
+        vote(1, reg(1, "A") if i % 2 == 0 else unreg(), i * STEP)   # 얼굴은 계속 보임
+    check("얼굴이 보이는 동안은 안내하지 않음", not needs_face_hint(1, 10 * STEP))
+
+
+def test_multi_track():
+    judge._reset_all()
+    out1, out2, t = [], [], 0.0
+    for _ in range(VOTE_MIN):
+        out1.append(vote(1, reg(3, "C"), t))
+        out2.append(vote(2, unreg(), t))
+        t += STEP
+    ok = (out1[-1] is not None and out1[-1].category == "registered" and out1[-1].track_id == 1
+          and out2[-1] is not None and out2[-1].category == "unregistered" and out2[-1].track_id == 2)
+    check("여러 명: 추적 번호별 결과가 섞이지 않음", ok, f"{out1[-1]}, {out2[-1]}")
+
+
+def test_stale_cleanup_and_unknown_track():
+    judge._reset_all()
+    vote(1, noface(), 0.0)
+    vote(2, noface(), judge.STALE_SEC + 1)          # 다른 사람 때문에 정리가 일어남
+    check("오래된 추적 번호는 지워짐", 1 not in judge._tracks)
+    check("모르는 추적 번호는 안내하지 않음", needs_face_hint(99, 0.0) is False)
+
+
+# ──────────────────────────────────────────────
+def main() -> int:
+    print(f"설정: VOTE_WINDOW={VOTE_WINDOW}, VOTE_MIN={VOTE_MIN}, "
+          f"FACE_HINT_SEC={FACE_HINT_SEC}, UNKNOWN_TIMEOUT_SEC={UNKNOWN_TIMEOUT_SEC}\n")
+    tests = [test_registered, test_unregistered, test_mixed_stays_pending, test_flicker_and_sliding,
+             test_reset_after_decision, test_unknown_never_found, test_unknown_after_face_lost,
+             test_face_found_no_hint, test_multi_track, test_stale_cleanup_and_unknown_track]
     for t in tests:
-        try:
-            t()
-            print(f"  통과  {t.__name__}")
-        except AssertionError as e:
-            failed += 1
-            print(f"  실패  {t.__name__}: {e}")
-    print(f"\n{len(tests) - failed}/{len(tests)} 통과 "
-          f"(VOTE_WINDOW={config.VOTE_WINDOW}, VOTE_MIN={config.VOTE_MIN}, "
-          f"FACE_HINT_SEC={config.FACE_HINT_SEC}, UNKNOWN_TIMEOUT_SEC={config.UNKNOWN_TIMEOUT_SEC})")
-    sys.exit(1 if failed else 0)
+        print(f"▶ {t.__name__}")
+        t()
+    failed = [r for r in _results if not r[1]]
+    print(f"\n결과: {len(_results) - len(failed)}/{len(_results)} 통과")
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
