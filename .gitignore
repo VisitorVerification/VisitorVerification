@@ -6,3 +6,5 @@ runs/
 *.db-wal
 *.db-shm
 *.pt
+# 얼굴 특징값 (개인정보, A의 임시 저장소)
+experiments/known_faces.npz
