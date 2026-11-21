@@ -26,6 +26,7 @@ import time
 import cv2
 import numpy as np
 
+import config as _config
 from common.types import PersonBox, RecognitionResult
 from config import (CAMERA_INDEX, DB_PATH, FRAME_HEIGHT, FRAME_WIDTH, MATCH_THRESHOLD,
                     MODELS_DIR, USE_CLAHE)
@@ -43,6 +44,7 @@ DETECT_TOP_K = 5000
 # ── recognize() 설정 (인수인계서 5.2) ──
 BBOX_MARGIN = 0.10       # 사람 박스를 이 비율만큼 넓혀 자른다
 MIN_FACE_WIDTH = 40      # 얼굴 폭이 이보다 작으면 얼굴 못 찾음으로 본다 (픽셀)
+HEAD_Y_RATIO = 0.25      # 사람 박스에서 머리가 있을 것으로 보는 높이 (위에서부터 비율). 얼굴 고를 때 기준점
 
 # ── CLAHE 설정 (인수인계서 5.4) ──
 CLAHE_CLIP = 2.0
@@ -336,6 +338,58 @@ def _clip_box(x1: int, y1: int, x2: int, y2: int, w: int, h: int) -> tuple[int, 
     return max(0, x1), max(0, y1), min(w, x2), min(h, y2)
 
 
+def _pick_face(faces: np.ndarray, box: tuple[float, float, float, float]) -> np.ndarray | None:
+    """사람 박스 위쪽 가운데(머리 자리)에 가장 가까운 얼굴을 고른다.
+    두 사람이 겹쳐 서 있어도 옆 사람 얼굴을 고르지 않게 하려는 것이다.
+    - box: 사람 박스 (x1, y1, x2, y2). faces와 같은 좌표계
+    - 얼굴 중심이 박스의 가로 범위 밖이면 후보에서 뺀다
+    - 기준점: 박스 가로 가운데, 위에서 HEAD_Y_RATIO 높이. 박스 크기로 나눈 거리로 비교
+    """
+    if len(faces) == 0:
+        return None
+    bx1, by1, bx2, by2 = box
+    bw, bh = max(bx2 - bx1, 1.0), max(by2 - by1, 1.0)
+    tx, ty = (bx1 + bx2) / 2, by1 + bh * HEAD_Y_RATIO
+    best, best_score = None, float("inf")
+    for f in faces:
+        cx, cy = f[0] + f[2] / 2, f[1] + f[3] / 2
+        if not bx1 <= cx <= bx2:
+            continue
+        score = ((cx - tx) / bw) ** 2 + ((cy - ty) / bh) ** 2
+        if score < best_score:
+            best, best_score = f, score
+    return best
+
+
+# ──────────────────────────────────────────────
+# 거울 화면: "눈(화면)은 거울, 머리(인식·저장)는 원본"
+#   화면에 보여 줄 그림만 뒤집고, 인식·저장에는 원본 frame을 쓴다.
+#   박스·점 좌표도 화면용으로 바꿔 그리고, 글자는 뒤집은 그림 위에 그린다.
+# ──────────────────────────────────────────────
+def _mirror_on() -> bool:
+    """config.MIRROR. 예전 config.py처럼 값이 없으면 False."""
+    return bool(getattr(_config, "MIRROR", False))
+
+
+def _view_of(frame: np.ndarray) -> np.ndarray:
+    """화면에 보여 줄 그림 (MIRROR면 좌우 반전한 복사본). 원본 frame은 바꾸지 않는다."""
+    return cv2.flip(frame, 1) if _mirror_on() else frame.copy()
+
+
+def _view_box(face_row: np.ndarray, width: int) -> tuple[int, int, int, int]:
+    """원본 좌표의 얼굴 박스 → 화면에 그릴 (x, y, w, h)."""
+    x, y, w, h = (int(v) for v in face_row[:4])
+    if _mirror_on():
+        x = width - x - w
+    return x, y, w, h
+
+
+def _view_point(px: float, py: float, width: int) -> tuple[int, int]:
+    """원본 좌표의 점 → 화면에 그릴 점."""
+    px, py = int(px), int(py)
+    return (width - 1 - px, py) if _mirror_on() else (px, py)
+
+
 # ──────────────────────────────────────────────
 # 공통 명세 함수 (3.5)
 # ──────────────────────────────────────────────
@@ -405,8 +459,9 @@ def recognize(frame: np.ndarray, person: PersonBox) -> RecognitionResult:
     if crop.size == 0:
         return RecognitionResult(face_found=False)
 
-    # 2~3. 가장 큰 얼굴 하나. 없거나 너무 작으면 못 찾음
-    face = _largest(_detect_faces(crop))
+    # 2~3. 사람 박스의 머리 자리(위쪽 가운데)에 가장 가까운 얼굴 하나. 없거나 너무 작으면 못 찾음
+    #      (가장 큰 얼굴을 고르면 겹쳐 선 옆 사람 얼굴을 고를 수 있어서 위치로 고른다)
+    face = _pick_face(_detect_faces(crop), (x1 - cx1, y1 - cy1, x2 - cx1, y2 - cy1))
     if face is None or face[2] < MIN_FACE_WIDTH:
         return RecognitionResult(face_found=False)
 
@@ -455,12 +510,13 @@ def _demo(camera_index: int = CAMERA_INDEX) -> None:
             # B의 YOLO 대신 프레임 전체를 사람 한 명으로 본다 (인수인계서 8장)
             result = recognize(frame, PersonBox(track_id=1, bbox=(0, 0, w, h), conf=1.0))
 
-            # 그리기용: 얼굴 박스와 눈·코·입 5점
+            # 그리기용: 얼굴 박스와 눈·코·입 5점. 인식은 원본 frame, 그리기는 화면용 view (거울)
             faces = _detect_faces(frame)
-            main = _largest(faces)
+            main = _pick_face(faces, (0, 0, w, h))   # recognize()와 같은 방법으로 고른 얼굴
+            view = _view_of(frame)
             for f in faces:
-                x, y, fw_, fh_ = (int(v) for v in f[:4])
-                cv2.rectangle(frame, (x, y), (x + fw_, y + fh_), (160, 160, 160), 1)
+                x, y, fw_, fh_ = _view_box(f, w)
+                cv2.rectangle(view, (x, y), (x + fw_, y + fh_), (160, 160, 160), 1)
 
             if not result.face_found:
                 state = ("noface",)
@@ -476,14 +532,13 @@ def _demo(camera_index: int = CAMERA_INDEX) -> None:
                 label, color = f"UNREG  d={result.distance:.3f}", (0, 0, 255)
 
             if main is not None:
-                x, y, fw_, fh_ = (int(v) for v in main[:4])
-                cv2.rectangle(frame, (x, y), (x + fw_, y + fh_), color, 2)
-                cv2.putText(frame, label, (x, max(y - 8, 16)), font, 0.6, color, 2)
+                x, y, fw_, fh_ = _view_box(main, w)
+                cv2.rectangle(view, (x, y), (x + fw_, y + fh_), color, 2)
+                cv2.putText(view, label, (x, max(y - 8, 16)), font, 0.6, color, 2)
                 for i in range(5):
-                    px, py = int(main[4 + 2 * i]), int(main[5 + 2 * i])
-                    cv2.circle(frame, (px, py), 2, (255, 0, 255), -1)
+                    cv2.circle(view, _view_point(main[4 + 2 * i], main[5 + 2 * i], w), 2, (255, 0, 255), -1)
             else:
-                cv2.putText(frame, label, (10, 55), font, 0.6, color, 2)
+                cv2.putText(view, label, (10, 55), font, 0.6, color, 2)
 
             if state != last_state:
                 if state[0] == "match":
@@ -500,11 +555,12 @@ def _demo(camera_index: int = CAMERA_INDEX) -> None:
             current = 1.0 / max(now - prev, 1e-6)
             fps = current if fps == 0 else 0.9 * fps + 0.1 * current
             prev = now
-            cv2.putText(frame, f"FPS {fps:.1f}  faces {len(faces)}  known {len(_known)}  thr {MATCH_THRESHOLD:.3f}",
+            cv2.putText(view, f"FPS {fps:.1f}  faces {len(faces)}  known {len(_known)}  thr {MATCH_THRESHOLD:.3f}",
                         (10, 25), font, 0.6, (0, 255, 255), 2)
-            cv2.putText(frame, "l: reload   q: quit", (10, h - 12), font, 0.6, (0, 255, 255), 2)
+            cv2.putText(view, "l: reload   q: quit" + ("   [MIRROR]" if _mirror_on() else ""),
+                        (10, h - 12), font, 0.6, (0, 255, 255), 2)
 
-            cv2.imshow(window, frame)
+            cv2.imshow(window, view)
             key = cv2.waitKey(1) & 0xFF
             if key in (ord("q"), 27):   # q 또는 Esc
                 break
