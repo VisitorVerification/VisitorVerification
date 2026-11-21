@@ -98,3 +98,30 @@ flowchart LR
 | 4주 | 인식 함수 연결 | 메인 루프 연결, 중복 방지 | 회로 장착, 연동 시험 |
 | 5주 | 인식률·오인식률 확인, 기준값 조정 | 기록 조회·통계, 🔹 (선택) 카운터 승인 화면 | 배선 정리, 🔹 (선택) 승인용 DB 함수 |
 | 6주 | 시연 조명에서 재확인 | 전체 흐름 점검 | 반복 동작 시험, 시연 세팅 |
+
+## DB 개발
+
+SQLite 전체 설계, 공용 함수, 실행 방법은 [DB_DESIGN.md](README/DB_DESIGN.md)를 참고하세요.
+
+- 실제 DB 초기화: `python -m db.database`
+- 임시 DB 예제: `py -X utf8 db_example.py`
+- 테스트: `py -X utf8 -m unittest discover -s tests -v`
+
+기존 첫 실습은 [SQLITE_START.md](SQLITE_START.md)에 있습니다. 실제 DB는 `data/visitor.db`, 첫 실습 DB는 `data/demo.db`로 분리됩니다.
+
+## 아두이노 모형 문
+
+Arduino UNO용 코드는 [arduino/door_controller/door_controller.ino](arduino/door_controller/door_controller.ino)에 있습니다.
+배선, 시리얼 명령, Arduino IDE 업로드 및 실물 시험 순서는 [아두이노 안내](arduino/README.md)를 참고하세요.
+
+## 공통 명세 반영 (C)
+
+- DB 공용 구현: `db/database.py` (`from db import database`)
+- 방문 저장: `save_visit(decision, message, frame, approval_status=None)`
+- 사진은 DB 함수가 `data/captures/날짜/시각_방문번호.jpg`에 저장합니다.
+- 저장 시간은 한국 시간 `YYYY-MM-DD HH:MM:SS`, 기록 필터는 `date=`를 사용합니다.
+- 미등록 벡터 조회는 `recent_unknown_embeddings(minutes=10)`으로 np.float32 배열 목록을 반환합니다.
+- `python -m pip install -r requirements-db.txt` 후 `python -m db.database`로 초기화합니다.
+- v1 DB는 초기화할 때 원본 백업 후 v2 시간 형식으로 변환합니다.
+- 변경 결과와 연결 확인 사항: [C_INTEGRATION_REPORT.md](README/C_INTEGRATION_REPORT.md)
+- 기존 발표 요약 문서는 작성 당시의 구현이며 현재 API는 위 설계 문서를 기준으로 사용합니다.

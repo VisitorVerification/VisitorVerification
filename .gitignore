@@ -1,10 +1,22 @@
+# 가상환경·캐시
 .venv/
+venv/
 __pycache__/
+*.pyc
+.env
+
+# 데이터 (등록 얼굴, DB, 방문 사진)
 data/
-runs/
+faces/
+captures/
 *.db
 *.db-wal
 *.db-shm
+*.db-journal
+
+# YOLO 모델·결과
 *.pt
+runs/
+
 # 얼굴 특징값 (개인정보, A의 임시 저장소)
 experiments/known_faces.npz
