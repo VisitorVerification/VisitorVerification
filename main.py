@@ -1,13 +1,16 @@
 import argparse
+import functools
 import itertools
 import logging
 import time
+from pathlib import Path
 
 import cv2
 
 from common.types import Decision
-from config import (CAMERA_INDEX, FACE_INTERVAL, FRAME_HEIGHT, FRAME_WIDTH, MESSAGE_SEC, MIRROR, MSG_COUNTER,
-                    MSG_FACE_HINT, MSG_WELCOME, SERIAL_BAUD, SERIAL_PORT, USE_ARDUINO, WINDOW_NAME)
+from config import (CAMERA_INDEX, DB_PATH, FACE_INTERVAL, FRAME_HEIGHT, FRAME_WIDTH, MESSAGE_SEC, MIRROR,
+                    MSG_COUNTER, MSG_FACE_HINT, MSG_WELCOME, SERIAL_BAUD, SERIAL_PORT, USE_ARDUINO,
+                    WINDOW_NAME)
 from output import door as door_module
 from output.display import draw_debug, mirror, setup_window, show_message, toggle_fullscreen
 from vision import detector
@@ -17,7 +20,7 @@ HINT_SEC = 1           # 얼굴 안내 배너는 안내가 필요한 동안 1초
 log = logging.getLogger("main")
 
 
-# ── 가짜 함수: --fake는 판정·기록 모두, 실제 모드는 C의 DB가 오기 전까지 기록만 쓴다 ──
+# ── 가짜 함수: --fake에서만 쓴다 (판정은 키보드, 기록은 콘솔 출력. 진짜 DB에는 저장하지 않음) ──
 
 _fake_visit_ids = itertools.count(1)
 
@@ -114,9 +117,32 @@ def reload_faces(face, announce) -> None:
         log.exception("등록 얼굴을 다시 불러오지 못했습니다 (이전 등록 얼굴로 계속)")
 
 
+def open_db():
+    """C의 DB를 준비하고 (save_visit, save_door_event, recent_unknown_embeddings)를 돌려준다.
+    DB 경로는 A의 등록 얼굴과 같은 config.DB_PATH. 실패하면 예외를 그대로 올린다."""
+    from db import database as db
+    db.init_db(DB_PATH)
+    return (functools.partial(db.save_visit, db_path=DB_PATH),
+            functools.partial(db.save_door_event, db_path=DB_PATH),
+            functools.partial(db.recent_unknown_embeddings, db_path=DB_PATH))
+
+
+def door_event_saver(save_door_event):
+    """문 이벤트 콜백. 다른 스레드(타이머·시리얼 수신)에서도 불리므로 오류는 여기서 로그로 남긴다."""
+    def on_event(event: str, visit_id: int | None) -> None:
+        try:
+            save_door_event(event, visit_id)
+        except Exception:
+            log.exception("문 이벤트 기록 중 오류: %s (visit %s)", event, visit_id)
+    return on_event
+
+
 def run(fake: bool) -> None:
     face = judge = announce = None
-    if not fake:
+    if fake:
+        save_visit, save_door_event = fake_save_visit, fake_save_door_event
+        print("※ --fake: 기록은 콘솔에만 출력하고 DB에는 저장하지 않습니다.")
+    else:
         from output import announce
         from vision import face, judge
         try:
@@ -124,12 +150,15 @@ def run(fake: bool) -> None:
         except Exception:
             log.exception("얼굴 인식 모델을 불러오지 못했습니다 (models/ 폴더 확인)")
             return
-        print("※ C의 DB가 아직 연결되지 않아 기록은 가짜 함수(콘솔 출력)로 남깁니다.")
-
-    save_visit, save_door_event = fake_save_visit, fake_save_door_event   # C의 함수가 오면 교체
+        try:
+            save_visit, save_door_event, announce.recent_unknown_embeddings = open_db()
+        except Exception:
+            log.exception("DB를 열지 못했습니다 (data/ 폴더 확인)")
+            return
+        print(f"기록 저장 위치: {Path(DB_PATH).resolve()}")
 
     door = make_door()
-    door.on_event(lambda event, visit_id: save_door_event(event, visit_id))
+    door.on_event(door_event_saver(save_door_event))
     cap = open_camera()
     if not cap.isOpened():
         log.error("카메라를 열 수 없습니다 (CAMERA_INDEX=%s)", CAMERA_INDEX)
@@ -220,7 +249,7 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     parser = argparse.ArgumentParser(description="방문자 확인 시스템 메인 프로그램")
     parser.add_argument("--fake", action="store_true",
-                        help="A의 얼굴 인식 대신 키보드 r/u/k로 판정 (기록도 가짜)")
+                        help="A의 얼굴 인식 대신 키보드 r/u/k로 판정 (기록은 콘솔에만, DB 저장 안 함)")
     args = parser.parse_args()
     run(fake=args.fake)
 
