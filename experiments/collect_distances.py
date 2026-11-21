@@ -126,10 +126,10 @@ def _measure(who: str, condition: str, frames: int, known, clahe: bool,
                 return None
             frame_no += 1
 
-            faces = F._detect_faces(frame)
-            view = frame.copy()
+            faces = F._detect_faces(frame)          # 측정은 원본으로
+            view = F._view_of(frame)                # 화면만 거울 (config.MIRROR)
             for f in faces:
-                x, y, w, h = (int(v) for v in f[:4])
+                x, y, w, h = F._view_box(f, frame.shape[1])
                 cv2.rectangle(view, (x, y), (x + w, y + h), (0, 200, 0) if len(faces) == 1 else (0, 0, 255), 2)
 
             # 측정: FACE_INTERVAL 프레임마다, 얼굴이 정확히 1개일 때만
