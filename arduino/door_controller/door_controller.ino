@@ -1,6 +1,6 @@
 /*
  * 방문자 확인 시스템 / Arduino UNO R3
- * 9600bps, 한 줄에 한 명령: OPEN, DENY, IDLE, WAIT, RETRY
+ * 9600bps, 한 줄에 한 명령: OPEN, DENY, IDLE, WAIT, HINT (RETRY도 허용)
  * 송신: READY, OPENED, CLOSED, BUSY, ERROR ...
  * 통과 센서 없이 문을 연 뒤 OPEN_HOLD_MS가 지나면 자동으로 닫습니다.
  * 실제 출입문이 아닌 폼보드 모형용 코드입니다.
@@ -164,13 +164,23 @@ void handleCommand(char *command, unsigned long now) {
   const bool isDeny = strcmp(command, "DENY") == 0;
   const bool isIdle = strcmp(command, "IDLE") == 0;
   const bool isWait = strcmp(command, "WAIT") == 0;
-  const bool isRetry = strcmp(command, "RETRY") == 0;
+  const bool isRetry = strcmp(command, "HINT") == 0 || strcmp(command, "RETRY") == 0;
   if (!isOpen && !isDeny && !isIdle && !isWait && !isRetry) {
     Serial.println(F("ERROR UNKNOWN_COMMAND"));
     return;
   }
+  if (isOpen && state == OPEN_STATE) {
+    // B 공통 명세: 열린 동안 다시 OPEN을 받으면 그 시점부터 30초를 다시 잽니다.
+    openedAt = now;
+    return;
+  }
+  if (isOpen && state == CLOSING_STATE && !startingUp) {
+    // B가 마지막 OPEN의 방문 번호를 사용하므로 닫힘 도중 새 허용 요청도 실제로 적용합니다.
+    beginOpen(now);
+    return;
+  }
   if (cycleInProgress()) {
-    // 중복 OPEN은 타이머를 초기화하지 않습니다. 다른 방문 명령은 대기열에 넣지 않습니다.
+    // 열리는 중의 OPEN은 유지하고, 문 동작 중 다른 상태 명령은 BUSY로 거부합니다.
     if (!(isOpen && (state == OPENING_STATE || state == OPEN_STATE))) {
       Serial.println(F("BUSY"));
     }

@@ -1,4 +1,4 @@
--- Schema version 1. All timestamps are UTC ISO 8601 strings produced by database.py.
+-- Schema version 2. All timestamps use KST: YYYY-MM-DD HH:MM:SS.
 BEGIN IMMEDIATE;
 
 CREATE TABLE persons (
@@ -70,5 +70,5 @@ CREATE TABLE door_events (
 );
 CREATE INDEX idx_door_events_visit ON door_events(visit_id, event_at, id);
 
-PRAGMA user_version = 1;
+PRAGMA user_version = 2;
 COMMIT;

@@ -7,15 +7,20 @@ from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
+from unittest.mock import patch
 
-import database as db
+import numpy as np
+
+from common.imageio import imread_unicode
+from common.types import Decision
+from db import database as db
 
 
 class DatabaseTests(unittest.TestCase):
     def setUp(self):
         self.folder = tempfile.TemporaryDirectory()
         self.addCleanup(self.folder.cleanup)
-        self.path = Path(self.folder.name) / "visitor.db"
+        self.path = Path(self.folder.name) / "한글 경로" / "visitor.db"
         db.init_db(self.path)
         self.now = datetime(2026, 11, 7, 3, 0, tzinfo=timezone.utc)
 
@@ -24,7 +29,16 @@ class DatabaseTests(unittest.TestCase):
 
     def visit(self, category="unregistered", **kwargs):
         kwargs.setdefault("visited_at", self.now)
-        return db.save_visit(category, db_path=self.path, **kwargs)
+        person_id = kwargs.pop("person_id", None)
+        name = kwargs.pop("name", None)
+        distance = kwargs.pop("face_distance", None)
+        embedding = kwargs.pop("embedding", None)
+        decision = Decision(category, track_id=1, person_id=person_id, name=name,
+                            distance=distance, embedding=embedding)
+        message = kwargs.pop("message", f"{name or '김동진'}님 환영합니다." if category == "registered"
+                             else "카운터에 가서 문의하세요.")
+        frame = kwargs.pop("frame", np.zeros((16, 24, 3), dtype=np.uint8))
+        return db.save_visit(decision, message, frame, db_path=self.path, **kwargs)
 
     def read(self, sql, params=()):
         with closing(sqlite3.connect(self.path)) as conn, conn:
@@ -35,7 +49,7 @@ class DatabaseTests(unittest.TestCase):
         db.init_db(self.path)
         self.assertEqual(len(db.list_persons(db_path=self.path)), 1)
         self.assertEqual(self.read("PRAGMA journal_mode")[0][0], "wal")
-        self.assertEqual(self.read("PRAGMA user_version")[0][0], 1)
+        self.assertEqual(self.read("PRAGMA user_version")[0][0], 2)
         self.assertEqual(self.read("PRAGMA foreign_key_check"), [])
 
     def test_demo_and_future_schemas_are_not_overwritten(self):
@@ -48,7 +62,7 @@ class DatabaseTests(unittest.TestCase):
         with closing(sqlite3.connect(demo)) as conn, conn:
             self.assertEqual(conn.execute("SELECT * FROM visits").fetchall(), [(1,)])
         with closing(sqlite3.connect(self.path)) as conn, conn:
-            conn.execute("PRAGMA user_version = 2")
+            conn.execute("PRAGMA user_version = 99")
         with self.assertRaises(RuntimeError):
             db.init_db(self.path)
 
@@ -92,7 +106,7 @@ class DatabaseTests(unittest.TestCase):
         for category, kwargs in [
             ("bad", {}), ("registered", {}), ("registered", {"person_id": 999}),
             ("unregistered", {"person_id": 1}), ("unregistered", {"approval_status": "approved"}),
-            ("unregistered", {"face_distance": float("inf")}),
+            ("unregistered", {"face_distance": float("nan")}),
             ("unregistered", {"face_distance": -1}),
             ("unknown", {"embedding": [1, 2], "model_key": "test"}),
             ("unregistered", {"visited_at": datetime(2026, 11, 7)}),
@@ -111,8 +125,8 @@ class DatabaseTests(unittest.TestCase):
     def test_recent_vectors_expiry_and_cleanup(self):
         visit_id = self.visit(embedding=[1, 2, 3], model_key="test-v1")
         rows = db.recent_unknown_embeddings(model_key="test-v1", now=self.now, db_path=self.path)
-        self.assertEqual(rows[0]["visit_id"], visit_id)
-        self.assertEqual(rows[0]["embedding"], [1, 2, 3])
+        self.assertEqual(rows[0].dtype, np.float32)
+        np.testing.assert_array_equal(rows[0], [1, 2, 3])
         self.assertEqual(db.recent_unknown_embeddings(
             model_key="test-v1", now=self.now - timedelta(seconds=1), db_path=self.path), [])
         later = self.now + timedelta(minutes=10)
@@ -127,7 +141,7 @@ class DatabaseTests(unittest.TestCase):
         self.visit(visited_at=start)
         self.visit("unknown", visited_at=start + timedelta(hours=23))
         self.visit(visited_at=start + timedelta(days=1))
-        records = db.get_records(day="2026-11-07", db_path=self.path)
+        records = db.get_records(date="2026-11-07", db_path=self.path)
         self.assertEqual(len(records), 2)
         self.assertEqual(db.get_today_stats(day="2026-11-07", db_path=self.path),
                          {"registered": 0, "unregistered": 1, "unknown": 1, "total": 2})
@@ -157,7 +171,7 @@ class DatabaseTests(unittest.TestCase):
         db.save_door_event("close", visit_id, db_path=self.path)
         row = db.get_visit(visit_id, db_path=self.path)
         self.assertEqual(row["door_opened"], 1)
-        self.assertEqual(row["passed_at"], "2026-11-07T03:00:01.000000Z")
+        self.assertEqual(row["passed_at"], "2026-11-07 12:00:01")
         self.assertEqual(len(db.get_door_events(visit_id, db_path=self.path)), 4)
         with self.assertRaises(ValueError):
             db.save_door_event("close", visit_id, event_key="cycle-1-open", db_path=self.path)
@@ -226,6 +240,118 @@ class DatabaseTests(unittest.TestCase):
                            (person_id, model_key, dimension, embedding, created_at)
                            VALUES (?, 'test', ?, ?, '2026-11-07T00:00:00.000000Z')""", values)
         self.assertEqual(self.read("PRAGMA integrity_check"), [("ok",)])
+
+    def test_b_signature_writes_real_jpeg_with_kst_name_and_relative_path(self):
+        decision = Decision("unregistered", 42, embedding=np.array([1, 2, 3], dtype=np.float32))
+        frame = np.full((20, 30, 3), 128, dtype=np.uint8)
+        visit_id = db.save_visit(decision, "카운터에 가서 문의하세요.", frame, None,
+                                 visited_at=self.now, db_path=self.path)
+        row = db.get_visit(visit_id, db_path=self.path)
+        self.assertEqual(row["visited_at"], "2026-11-07 12:00:00")
+        self.assertEqual(row["image_path"], f"captures/2026-11-07/120000_{visit_id}.jpg")
+        saved = imread_unicode(str(self.path.parent / row["image_path"]))
+        self.assertEqual(saved.shape, frame.shape)
+        self.assertLess(float(np.abs(saved.astype(float) - frame).max()), 3)
+        rows = db.recent_unknown_embeddings(now=self.now, db_path=self.path)
+        self.assertEqual(rows[0].dtype, np.float32)
+        np.testing.assert_array_equal(rows[0], decision.embedding)
+
+    def test_recent_vector_minutes_and_models(self):
+        self.visit(embedding=[1, 2, 3], model_key="test-v1", visited_at=self.now - timedelta(minutes=6))
+        self.visit(embedding=[4, 5, 6], model_key="test-v2")
+        self.assertEqual(db.recent_unknown_embeddings(5, model_key="test-v1", now=self.now, db_path=self.path), [])
+        rows = db.recent_unknown_embeddings(10, model_key="test-v1", now=self.now, db_path=self.path)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].dtype, np.float32)
+
+    def test_missing_known_faces_distance_infinity_is_null(self):
+        visit_id = self.visit(face_distance=float("inf"))
+        self.assertIsNone(db.get_visit(visit_id, db_path=self.path)["face_distance"])
+
+    def test_image_failure_rolls_back_record_and_vector_and_partial_file(self):
+        def fail_write(path, frame):
+            Path(path).write_bytes(b"partial jpeg")
+            return False
+        with patch.object(db.imageio, "imwrite_unicode", side_effect=fail_write):
+            with self.assertRaises(OSError):
+                self.visit(embedding=[1, 2, 3])
+        self.assertEqual(db.get_records(db_path=self.path), [])
+        self.assertEqual(self.read("SELECT * FROM visit_embeddings"), [])
+        self.assertEqual(list(self.path.parent.rglob("*.jpg")), [])
+
+    def test_sql_failure_after_image_write_also_cleans_the_image(self):
+        with closing(sqlite3.connect(self.path)) as conn, conn:
+            conn.execute("""CREATE TRIGGER fail_image BEFORE UPDATE OF image_path ON visits
+                            BEGIN SELECT RAISE(ABORT, 'test failure'); END""")
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.visit()
+        self.assertEqual(db.get_records(db_path=self.path), [])
+        self.assertEqual(list(self.path.parent.rglob("*.jpg")), [])
+
+    def test_existing_capture_is_never_overwritten(self):
+        original = self.path.parent / "captures/2026-11-07/120000_1.jpg"
+        original.parent.mkdir(parents=True)
+        original.write_bytes(b"existing photo")
+        with self.assertRaises(FileExistsError):
+            self.visit()
+        self.assertEqual(original.read_bytes(), b"existing photo")
+        self.assertEqual(db.get_records(db_path=self.path), [])
+
+    def test_bad_frames_never_create_visits(self):
+        for frame in (None, np.zeros((0, 0, 3), np.uint8), np.zeros((5, 5), np.uint8),
+                      np.zeros((5, 5, 3), np.float32)):
+            with self.assertRaises(ValueError):
+                self.visit(frame=frame)
+        self.assertEqual(db.get_records(db_path=self.path), [])
+
+    def test_records_accept_b_positional_arguments_and_default_limit_200(self):
+        for _ in range(3):
+            self.visit()
+        rows = db.get_records("unregistered", "2026-11-07", None, 2, db_path=self.path)
+        self.assertEqual(len(rows), 2)
+        import inspect
+        self.assertEqual(inspect.signature(db.get_records).parameters["limit"].default, 200)
+
+    def create_legacy_database(self, *, bad_time=False):
+        legacy_path = Path(self.folder.name) / "old.db"
+        schema = Path(__file__).with_name("fixtures") / "schema_v1.sql"
+        with closing(sqlite3.connect(legacy_path)) as conn, conn:
+            conn.executescript(schema.read_text(encoding="utf-8-sig"))
+            conn.execute("INSERT INTO persons VALUES (1, '김동진', 'faces/1.jpg', ?)",
+                         ("bad-time" if bad_time else "2026-11-07T03:00:00.123456Z",))
+            conn.execute("""INSERT INTO visits(id, visited_at, category, person_id, person_name,
+                         message, image_path, approval_status, door_opened, passed_at)
+                         VALUES (1, '2026-11-07T03:00:00.000000Z', 'registered', 1, '김동진',
+                         '환영합니다.', 'captures/old.jpg', 'auto', 1, '2026-11-07T03:00:01.000000Z')""")
+            conn.execute("INSERT INTO door_events VALUES (1, '2026-11-07T03:00:01.000000Z', 'pass', 1, NULL)")
+        return legacy_path
+
+    def test_migration_keeps_ids_images_and_history_and_creates_backup(self):
+        legacy_path = self.create_legacy_database()
+        db.init_db(legacy_path)
+        row = db.get_visit(1, db_path=legacy_path)
+        self.assertEqual(row["visited_at"], "2026-11-07 12:00:00")
+        self.assertEqual(row["passed_at"], "2026-11-07 12:00:01")
+        self.assertEqual(row["image_path"], "captures/old.jpg")
+        self.assertEqual(db.list_persons(db_path=legacy_path)[0]["created_at"], "2026-11-07 12:00:00")
+        self.assertEqual(db.get_door_events(1, db_path=legacy_path)[0]["event_at"], "2026-11-07 12:00:01")
+        backups = list((legacy_path.parent / "backups").glob("*.backup.db"))
+        self.assertEqual(len(backups), 1)
+        with closing(sqlite3.connect(backups[0])) as conn:
+            self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 1)
+            self.assertEqual(conn.execute("SELECT visited_at FROM visits").fetchone()[0],
+                             "2026-11-07T03:00:00.000000Z")
+        db.init_db(legacy_path)
+        self.assertEqual(len(list((legacy_path.parent / "backups").glob("*.backup.db"))), 1)
+
+    def test_bad_legacy_timestamp_rolls_back_migration(self):
+        legacy_path = self.create_legacy_database(bad_time=True)
+        with self.assertRaises(ValueError):
+            db.init_db(legacy_path)
+        with closing(sqlite3.connect(legacy_path)) as conn:
+            self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 1)
+            self.assertEqual(conn.execute("SELECT visited_at FROM visits").fetchone()[0],
+                             "2026-11-07T03:00:00.000000Z")
 
 
 if __name__ == "__main__":
