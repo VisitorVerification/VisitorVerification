@@ -11,6 +11,9 @@ python -m vision.register --delete 홍길동        등록자 삭제 (DB와 data
 저장소: C의 database.py(db/database.py 또는 루트 database.py)가 있으면 C의 함수,
         없으면 experiments/known_faces.npz (임시). 연결은 vision/face.py가 맡는다.
 등록 후에는 메인 프로그램을 다시 시작하거나 reload_known_faces()를 호출해야 반영된다.
+
+거울 화면: config.MIRROR가 True면 찍는 화면만 거울처럼 보인다 (main.py와 같은 방향).
+           저장 사진과 특징 벡터는 항상 원본이라 MIRROR를 켜든 끄든 등록 데이터를 그대로 쓴다.
 """
 import argparse
 import os
@@ -22,14 +25,15 @@ import numpy as np
 
 from common.imageio import imread_unicode, imwrite_unicode
 from config import CAMERA_INDEX, DATA_DIR, FACES_DIR, USE_CLAHE
-from vision.face import (_detect_faces, _get_store, _store_label, extract_embedding,
-                         model_key, open_camera)
+from vision.face import (_detect_faces, _get_store, _mirror_on, _store_label, _view_box, _view_of,
+                         extract_embedding, model_key, open_camera)
 
 # (화면에 쓸 영문, 콘솔에 쓸 한글 안내) — 인수인계서 5.3 촬영 조건
+# 왼쪽·오른쪽은 "내 몸 기준". 거울 화면에서는 화면 속 얼굴도 같은 쪽을 본다 (양쪽 다 찍으므로 결과는 같음)
 POSES = [
     ("FRONT", "정면을 보고, 평소 조명에서 찍어요"),
-    ("LEFT 15-30", "얼굴을 왼쪽으로 15~30° 돌려 주세요"),
-    ("RIGHT 15-30", "얼굴을 오른쪽으로 15~30° 돌려 주세요"),
+    ("LEFT 15-30", "고개를 내 왼쪽으로 15~30° 돌려 주세요"),
+    ("RIGHT 15-30", "고개를 내 오른쪽으로 15~30° 돌려 주세요"),
     ("FRONT DARK", "정면, 조명을 조금 어둡게 해 주세요"),
     ("FRONT FAR", "정면, 카메라에서 조금 멀리 서 주세요"),
 ]
@@ -84,6 +88,8 @@ def _capture_webcam(camera_index: int) -> list[np.ndarray] | None:
     shots: list[np.ndarray] = []
     flash_text, flash_color, flash_left = "", (0, 0, 0), 0   # 찍은 직후 잠깐 띄우는 문구
     total = len(POSES)
+    if _mirror_on():
+        print("거울 화면입니다 (보이는 화면만 뒤집혀 있고, 저장되는 사진은 원본입니다).")
     print(f"\n[1/{total}] {POSES[0][1]} → 스페이스바를 누르세요 (q 또는 Esc: 취소)")
     try:
         while len(shots) < total:
@@ -92,12 +98,13 @@ def _capture_webcam(camera_index: int) -> list[np.ndarray] | None:
                 print("카메라에서 영상을 읽지 못했습니다")
                 return None
 
-            faces = _detect_faces(frame)
-            view = frame.copy()                     # 저장할 원본에는 그리지 않는다
+            faces = _detect_faces(frame)            # 검출은 원본으로
+            view = _view_of(frame)                  # 화면용 (MIRROR면 거울). 저장할 원본에는 그리지 않는다
             for f in faces:
-                x, y, w, h = (int(v) for v in f[:4])
+                x, y, w, h = _view_box(f, frame.shape[1])   # 박스 좌표도 화면 방향에 맞춤
                 color = (0, 200, 0) if len(faces) == 1 else (0, 0, 255)
                 cv2.rectangle(view, (x, y), (x + w, y + h), color, 2)
+            # 글자는 뒤집은 다음에 그린다 (거꾸로 보이지 않게)
 
             step = len(shots)
             cv2.putText(view, f"{step + 1}/{total} {POSES[step][0]}", (10, 30), font, 0.9, (0, 255, 255), 2)
