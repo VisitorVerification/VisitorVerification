@@ -1,4 +1,5 @@
 import argparse
+import functools
 import logging
 import os
 import random
@@ -7,12 +8,13 @@ from datetime import datetime, timedelta
 
 from flask import Flask, abort, render_template, request, send_from_directory, url_for
 
-from config import CAPTURES_DIR, DASHBOARD_HOST, DASHBOARD_PORT, DATA_DIR
+from config import CAPTURES_DIR, DASHBOARD_HOST, DASHBOARD_PORT, DATA_DIR, DB_PATH
 
 log = logging.getLogger("dashboard")
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CAPTURES_ABS = os.path.join(PROJECT_ROOT, CAPTURES_DIR)   # 이 폴더만 주소로 공개 (5.7절)
+DB_ABS = os.path.join(PROJECT_ROOT, DB_PATH)              # main.py를 프로젝트 폴더에서 켰을 때와 같은 DB
 IMAGE_EXTS = (".jpg", ".jpeg", ".png")
 
 REFRESH_SEC = 5        # / 자동 새로고침 간격
@@ -29,7 +31,7 @@ app = Flask(__name__)
 data = {"get_records": None, "get_today_stats": None}
 
 
-# ── 가짜 조회 함수 (--fake): C의 함수가 오기 전까지 쓴다. 4주차에 C의 함수로 바꾼다 ──
+# ── 가짜 조회 함수 (--fake에서만): 예시 기록으로 화면을 확인할 때 쓴다. 진짜 DB는 읽지 않음 ──
 
 def _make_fake_records() -> list[dict]:
     """visits 테이블(3.7절) 컬럼 이름을 키로 쓰는 예시 기록. 오늘·어제·그제."""
@@ -164,15 +166,27 @@ def captures(filename: str):
     return send_from_directory(CAPTURES_ABS, filename)   # ../ 같은 경로 탈출은 404
 
 
+def open_db(db_path: str = DB_ABS) -> tuple:
+    """C의 DB를 준비하고 (get_records, get_today_stats)를 돌려준다. 실패하면 예외를 그대로 올린다."""
+    from db import database as db
+    db.init_db(db_path)
+    return (functools.partial(db.get_records, db_path=db_path),
+            functools.partial(db.get_today_stats, db_path=db_path))
+
+
 def run(fake: bool) -> None:
     if fake:
         _FAKE_RECORDS[:] = _make_fake_records()
         make_fake_captures()
         data["get_records"], data["get_today_stats"] = fake_get_records, fake_get_today_stats
+        print("※ --fake: 예시 기록을 보여 줍니다 (진짜 DB는 읽지 않음).")
     else:
-        print("C의 DB 함수(get_records, get_today_stats)가 아직 연결되지 않았습니다 (4주차 예정).")
-        print("지금은 python -m dashboard.app --fake 로 실행하세요.")
-        return
+        try:
+            data["get_records"], data["get_today_stats"] = open_db()
+        except Exception:
+            log.exception("DB를 열지 못했습니다 (data/ 폴더 확인)")
+            return
+        print(f"기록 읽는 위치: {DB_ABS}")
     print(f"대시보드: http://<노트북 IPv4>:{DASHBOARD_PORT}  (노트북에서는 http://127.0.0.1:{DASHBOARD_PORT})")
     app.run(host=DASHBOARD_HOST, port=DASHBOARD_PORT, debug=False)
 
@@ -180,7 +194,7 @@ def run(fake: bool) -> None:
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     parser = argparse.ArgumentParser(description="방문 기록 대시보드")
-    parser.add_argument("--fake", action="store_true", help="C의 DB 함수 대신 예시 기록 사용")
+    parser.add_argument("--fake", action="store_true", help="진짜 DB 대신 예시 기록으로 화면 확인")
     run(fake=parser.parse_args().fake)
 
 
