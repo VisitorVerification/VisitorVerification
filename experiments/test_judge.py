@@ -18,6 +18,8 @@ from config import FACE_HINT_SEC, UNKNOWN_TIMEOUT_SEC, VOTE_MIN, VOTE_WINDOW
 from vision import judge
 from vision.judge import needs_face_hint, vote
 
+judge.TURN_CHECK = False   # 다수결 규칙만 본다. 고개 돌리기 확인은 test_liveness.py에서 시험
+
 STEP = 0.2   # 가짜 프레임 간격 (초)
 _results: list[tuple[str, bool, str]] = []
 
