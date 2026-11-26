@@ -9,6 +9,7 @@ OpenCV 내장 YuNet(얼굴 검출) + SFace(특징 추출)를 쓴다.
 A가 더 제공하는 함수
 - model_key()  : C의 DB에 넘기는 모델·전처리 이름 (B가 save_visit, recent_unknown_embeddings에 사용)
 - open_camera(): 카메라 열기 (Windows CAP_DSHOW 먼저 시도)
+- head_ratio(), last_head_ratio(): 고개 돌리기 확인용 코 위치 비율 r (judge.py가 사용, 사진 대기 대책)
 
 등록 벡터 저장소
 - C의 database.py(sqlite_1 브랜치)가 db/database.py 또는 루트 database.py에 있으면 C의 함수를 쓴다.
@@ -46,6 +47,10 @@ BBOX_MARGIN = 0.10       # 사람 박스를 이 비율만큼 넓혀 자른다
 MIN_FACE_WIDTH = 40      # 얼굴 폭이 이보다 작으면 얼굴 못 찾음으로 본다 (픽셀)
 HEAD_Y_RATIO = 0.25      # 사람 박스에서 머리가 있을 것으로 보는 높이 (위에서부터 비율). 얼굴 고를 때 기준점
 
+# ── 고개 돌리기 확인 (사진 대기 대책) ──
+MIN_EYE_DIST = 20        # 두 눈 사이가 이 픽셀보다 좁으면 r을 믿기 어려워서 계산하지 않는다
+RATIO_KEEP_SEC = 10      # 이 시간(초) 넘게 갱신되지 않은 추적 번호의 r은 지운다
+
 # ── CLAHE 설정 (인수인계서 5.4) ──
 CLAHE_CLIP = 2.0
 CLAHE_TILE = (8, 8)
@@ -59,6 +64,7 @@ _recognizer = None
 _detector_size = None                               # 마지막으로 setInputSize()한 (w, h)
 _known: list[tuple[int, str, np.ndarray]] = []      # [(person_id, name, embedding), ...]
 _known_loaded = False
+_head_ratios: dict[int, tuple[float | None, float]] = {}   # 추적 번호 → (마지막 r, 기록 시각)
 
 
 # ──────────────────────────────────────────────
@@ -445,8 +451,42 @@ def compare(embedding: np.ndarray) -> tuple[int | None, str | None, float]:
     return None, None, dist
 
 
+def head_ratio(face_row: np.ndarray) -> float | None:
+    """YuNet 얼굴 한 줄 → 코 위치 비율 r. 눈 사이가 너무 좁으면 None.
+
+    코를 두 눈을 잇는 선에 비춘 위치 (원본 화면에서 왼쪽에 있는 눈 = 0, 오른쪽 눈 = 1).
+    정면이면 약 0.5이고, 고개를 돌리면 한쪽으로 움직인다. 평평한 사진은 기울여도 거의 그대로다.
+    눈을 잇는 선에 비춰서 재므로 고개를 옆으로 갸웃해도 값이 덜 흔들린다.
+    """
+    e1 = np.array(face_row[4:6], dtype=np.float64)
+    e2 = np.array(face_row[6:8], dtype=np.float64)
+    nose = np.array(face_row[8:10], dtype=np.float64)
+    left, right = (e1, e2) if e1[0] <= e2[0] else (e2, e1)
+    axis = right - left
+    length2 = float(axis @ axis)
+    if length2 < MIN_EYE_DIST ** 2:
+        return None
+    return float((nose - left) @ axis / length2)
+
+
+def _remember_ratio(track_id: int, ratio: float | None) -> None:
+    """recognize()가 추적 번호마다 마지막 r을 기록한다. 오래된 번호는 지운다."""
+    now = time.time()
+    for tid in [t for t, (_, at) in _head_ratios.items() if now - at > RATIO_KEEP_SEC]:
+        del _head_ratios[tid]
+    _head_ratios[track_id] = (ratio, now)
+
+
+def last_head_ratio(track_id: int) -> float | None:
+    """이 추적 번호의 마지막 recognize()에서 잰 r. 얼굴을 못 찾았거나 기록이 없으면 None."""
+    entry = _head_ratios.get(track_id)
+    return entry[0] if entry is not None else None
+
+
 def recognize(frame: np.ndarray, person: PersonBox) -> RecognitionResult:
-    """사람 박스 안의 얼굴을 인식한다 (인수인계서 5.2 처리 순서)."""
+    """사람 박스 안의 얼굴을 인식한다 (인수인계서 5.2 처리 순서).
+    결과와 별도로, 고개 돌리기 확인용 r을 추적 번호마다 기록한다 (last_head_ratio)."""
+    _remember_ratio(person.track_id, None)   # 얼굴을 못 찾으면 None으로 남는다
     if frame is None or frame.size == 0:
         return RecognitionResult(face_found=False)
     fh, fw = frame.shape[:2]
@@ -464,6 +504,8 @@ def recognize(frame: np.ndarray, person: PersonBox) -> RecognitionResult:
     face = _pick_face(_detect_faces(crop), (x1 - cx1, y1 - cy1, x2 - cx1, y2 - cy1))
     if face is None or face[2] < MIN_FACE_WIDTH:
         return RecognitionResult(face_found=False)
+
+    _remember_ratio(person.track_id, head_ratio(face))   # 고개 돌리기 확인용 (비율이라 잘라 낸 좌표여도 같다)
 
     # 4~5. (CLAHE는 _embedding_from_face 안에서) 특징 벡터 → 비교
     embedding = _embedding_from_face(crop, face)
