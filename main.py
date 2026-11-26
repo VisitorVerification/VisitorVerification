@@ -107,6 +107,18 @@ def needs_hint(people: list, now: float, judge) -> bool:
         return False
 
 
+def turn_prompt(people: list, now: float, judge) -> str | None:
+    """A의 고개 돌리기 확인(사진 대기 대책): 화면의 누군가가 대기 중이면 띄울 문구, 아니면 None."""
+    try:
+        for p in people:
+            message = judge.turn_prompt(p.track_id, now)
+            if message:
+                return message
+    except Exception:
+        log.exception("고개 돌리기 안내 확인 중 오류")
+    return None
+
+
 def reload_faces(face, announce) -> None:
     """l 키: 등록 얼굴을 다시 불러오고 쿨다운 기억을 지운다. 실패해도 이전 얼굴로 계속."""
     try:
@@ -204,8 +216,12 @@ def run(fake: bool) -> None:
                     visible = {p.track_id for p in people}
                     for tid in [t for t in results if t not in visible]:   # 화면을 떠난 사람은 지움
                         del results[tid]
+                # 고개 돌리기 안내(A)가 얼굴 안내보다 먼저. 환영·카운터 안내 중에는 덮지 않음
+                prompt = turn_prompt(people, now, judge)
+                if prompt and (banner is None or banner[1] in ("hint", "turn")):
+                    banner = (prompt, "turn", now + 0.3)
                 # 다른 안내가 없을 때만 얼굴 안내 (이미 얼굴 안내 중이면 1초 연장)
-                if (banner is None or banner[1] == "hint") and needs_hint(people, now, judge):
+                elif (banner is None or banner[1] == "hint") and needs_hint(people, now, judge):
                     banner = (MSG_FACE_HINT, "hint", now + HINT_SEC)
 
             if banner and now > banner[2]:
